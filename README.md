@@ -1,2 +1,2 @@
-# tyutchaosuan
+# tyut_supercomputing
 这是超算创新实践基地的github，目前用于培训过程，附有培训资料，大家在汇报前将学习成果上传到github
