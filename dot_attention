@@ -1,0 +1,35 @@
+import torch
+import math
+'''----------------------------------------------------------------------------------------------'''
+n = 10
+d = 5
+batch = 3
+
+# Q, K, V 都为 (batch,n,d)
+Q, K, V = torch.randn((batch, n ,d)), torch.randn((batch, n ,d)), torch.randn((batch, n ,d))
+'''----------------------------------------------------------------------------------------------'''
+class Scaled_Dot_Attention(torch.nn.Module):
+    def __init__(self, d_model, dropout):
+        super(Scaled_Dot_Attention, self).__init__()
+        self.dropout = torch.nn.Dropout(dropout)
+        self.d = d_model
+
+    def forward(self, Q, K, V):
+        # transpose的参数表示把i与j维度进行转置互换
+        scores = torch.matmul(Q, K.transpose(-1, -2)) / math.sqrt(self.d) 
+        
+        # 对最后一个维度进行soft
+        attenion_weigths = torch.nn.functional.softmax(scores, dim=-1) 
+        
+        # 进行dropout增加泛化能力
+        attenion_weigths = self.dropout(attenion_weigths)
+        
+        # 与V加权得到输出
+        output = torch.matmul(attenion_weigths, V)
+
+        return output
+    
+module = Scaled_Dot_Attention(d, dropout=0.1)
+'''----------------------------------------------------------------------------------------------'''
+output = module(Q, K, V)
+print(output.shape)
