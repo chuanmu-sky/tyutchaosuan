@@ -1,0 +1,23 @@
+import torch
+'''----------------------------------------------------------------------------------------------'''
+# 每个x都是 (batch,size_x) , 一共有n个
+# n决定了循环次数，决定的是横向的长度
+n = 5
+batch = 3
+size_x = 10
+data_x = torch.randn(n, batch, size_x)
+
+# 每个h都是 (batch,size_h) , 一共有m个
+# m决定了每次循环调用rnncell的次数，决定的是纵向的深度
+m = 2
+batch = 3
+size_h = 4
+data_h = torch.randn(m, batch, size_h)
+'''----------------------------------------------------------------------------------------------'''
+module = torch.nn.RNN(input_size=size_x, hidden_size=size_h, num_layers=m)
+'''----------------------------------------------------------------------------------------------'''
+output, hidden = module(data_x, data_h)
+# output是每次循环结束时的h，一共n个 (n,batch,size_h)
+# hidden是总循环结束后的每个rnncell所产生的h，一共m个 (m,batch,size_h)
+print(output.shape)
+print(hidden.shape)
