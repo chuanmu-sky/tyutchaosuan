@@ -1,0 +1,47 @@
+import torch
+'''----------------------------------------------------------------------------------------------'''
+alpha = ['e', 'h', 'l', 'o']
+get_digit = [[1, 0, 0, 0],
+             [0, 1, 0, 0],
+             [0, 0, 1, 0],
+             [0, 0, 0, 1]]
+
+# x实际上是hello , y实际上是olelh
+x = [1, 0, 2, 2, 3]
+y = [3, 2, 0, 2, 1]
+
+# x和y都是5组数据，每组数据都是(1,4)
+x = [get_digit[i] for i in x]
+x = torch.tensor(x, dtype=torch.float32).view(5, 1, 4)
+y = [get_digit[i] for i in y]
+y = torch.tensor(y, dtype=torch.float32).view(5, 1, 4)
+'''----------------------------------------------------------------------------------------------'''
+class Rnn(torch.nn.Module):
+    def __init__(self, size_x, size_h):
+        super(Rnn, self).__init__()
+        self.hidden = torch.zeros(1, 1, size_h)
+        self.modlue = torch.nn.RNN(input_size=size_x, hidden_size=size_h, num_layers=1)
+
+    def forward(self, x):
+        # 将5个(1,4)的代表hello的数据输入，输出5个(1,4)的代表新字母的数据
+        x, _ = self.modlue(x, self.hidden)
+        # 对x的最后一个维度进行softmax
+        x = torch.nn.functional.softmax(x, dim=2)
+        return x
+    
+module = Rnn(4, 4)
+'''----------------------------------------------------------------------------------------------'''
+criterion = torch.nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(module.parameters(), lr=0.05)
+'''----------------------------------------------------------------------------------------------'''
+for epoch in range(30):
+    loss = 0
+    output = module(x)
+    for i in range(5):
+        loss += criterion(output[i][0], y[i][0])
+    
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+print(torch.argmax(output, dim=2))
