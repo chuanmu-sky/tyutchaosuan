@@ -1,0 +1,37 @@
+import torch
+'''----------------------------------------------------------------------------------------------'''
+batch = 3
+n = 10
+d = 16
+
+# 输入数据x的形状(batch, n, d)
+X = torch.randn((batch, n, d))
+'''----------------------------------------------------------------------------------------------'''
+# 位置矩阵的形状必须与x的形状相同
+class Position_Coding(torch.nn.Module):
+    def __init__(self, batch, n, d):
+        super(Position_Coding, self).__init__()
+        # 位置矩阵的形状必须与x的形状相同
+        self.P = torch.zeros((batch, n, d))
+        
+        # 分子内容是 0~n-1，形状是(n,1) 
+        numerator = torch.arange(0, n, dtype=torch.float32).reshape(-1, 1)
+        
+        # 分母内容是 10000**(2i/d), 形状是(1,d/2)
+        denominator = torch.pow(10000, torch.arange(0, d, 2, dtype=torch.float32).reshape(1, -1) / d)
+
+        # X形状是(n,d/2)
+        X = numerator / denominator
+
+        # 对位置矩阵开始赋值
+        self.P[:, :, 0::2] = torch.sin(X) # 从0开始，步长为2
+        self.P[:, :, 1::2] = torch.cos(X) # 从1开始，步长为2
+
+    def forward(self, X):
+        X = X + self.P
+        return X
+    
+module = Position_Coding(batch, n, d)
+'''----------------------------------------------------------------------------------------------'''
+X = module(X)
+print(X.shape)

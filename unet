@@ -1,0 +1,73 @@
+import torch
+
+'''----------------------------------------------------------------------------------------------'''
+def Double_conv(input_channel, output_channel):
+    # unet左侧区域和右侧区域：每一层都是两次卷积
+    return torch.nn.Sequential(
+        torch.nn.Conv2d(input_channel, output_channel, kernel_size=3),
+        torch.nn.BatchNorm2d(output_channel),
+        torch.nn.ReLU(),
+        torch.nn.Conv2d(output_channel, output_channel, kernel_size=3),
+        torch.nn.BatchNorm2d(output_channel),
+        torch.nn.ReLU()
+    )
+    
+def Down(input_channel, output_channel):
+    # unet左侧区域：进入下一层时要先池化
+    return torch.nn.Sequential(
+        torch.nn.MaxPool2d(kernel_size=2),
+        Double_conv(input_channel, output_channel)
+    )
+
+class Up(torch.nn.Module):
+    # unit右侧区域：进入上一层时要反卷积和拼接
+    def __init__(self, channel):
+        super(Up, self).__init__()
+        self.upcnn = torch.nn.ConvTranspose2d(channel, channel//2, kernel_size=2, stride=2)
+
+    def forward(self, left, right):
+        # 先反卷积，然后裁剪，然后拼接
+        right = self.upcnn(right)
+        a = right.size()[2]
+        b = right.size()[3]
+        left = torch.nn.functional.interpolate(left,size=(a,b))
+        return torch.cat((left, right), dim=1)
+'''----------------------------------------------------------------------------------------------'''
+class Unet(torch.nn.Module):
+    def __init__(self):
+        super(Unet, self).__init__()
+        self.left_layer_1 = Double_conv(1, 64) 
+        self.left_layer_2 = Down(64, 128)
+        self.left_layer_3 = Down(128, 256)
+        self.left_layer_4 = Down(256, 512)
+        self.left_layer_5 = Down(512, 1024)
+
+        self.right_layer_5to4 = Up(1024)
+        self.right_layer_4 = Double_conv(1024, 512)
+        self.right_layer_4to3 = Up(512)
+        self.right_layer_3 = Double_conv(512, 256)
+        self.right_layer_3to2 = Up(256)
+        self.right_layer_2 = Double_conv(256, 128)
+        self.right_layer_2to1 = Up(128)
+        self.right_layer_1 = Double_conv(128, 64)
+        self.end = torch.nn.Conv2d(64, 2, kernel_size=1)
+
+    def forward(self, x):
+        x_1 = self.left_layer_1(x)
+        x_2 = self.left_layer_2(x_1)
+        x_3 = self.left_layer_3(x_2)
+        x_4 = self.left_layer_4(x_3)
+        x_5 = self.left_layer_5(x_4)
+
+        y_5 = x_5
+        y_4 = self.right_layer_4(self.right_layer_5to4(x_4, y_5))
+        y_3 = self.right_layer_3(self.right_layer_4to3(x_3, y_4))
+        y_2 = self.right_layer_2(self.right_layer_3to2(x_2, y_3))
+        y_1 = self.right_layer_1(self.right_layer_2to1(x_1, y_2))
+        return self.end(y_1)
+    
+module = Unet()
+'''----------------------------------------------------------------------------------------------'''
+x = torch.randn(1, 1, 572, 572)
+y = module(x)
+print(y.shape)

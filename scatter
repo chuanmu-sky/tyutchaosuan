@@ -1,0 +1,20 @@
+import torch
+# 创建索引张量
+# 索引张量的类型必须是int
+# 索引张量的第i个数字为j，代表要在输入张量的(i,j)的地方映射，***其余的地方保持输入张量原有的数据***
+index = torch.tensor([0, 1, 4, 6, 8, 6]) 
+
+# 创建映射张量
+# 映射张量的形状必须和索引张量的形状完全一致，因为要一一对应
+# 映射张量的第i个数字为k，代表要在输入张量的(i,j)的地方映射k
+src = torch.tensor([8, 5, 6, 7, 4, 3], dtype=torch.float)
+
+# 创建输入张量
+# 输入张量的形状是 (index的长度, 总类别数) ***总类别数 ≥ index中的最大元素的值+1 ***
+# 输入张量的数据类型要和映射张量的数据类型一样
+input = torch.zeros(size=(index.shape[0], 10), dtype=torch.float)
+
+# 创建独热编码
+# 所有的tensor参数的维度必须一样，所以要增加虚拟维度
+input = torch.scatter(input=input, dim=1, index=index.unsqueeze(1), src=src.unsqueeze(1))
+print(input)

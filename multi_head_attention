@@ -1,0 +1,58 @@
+import torch
+import math
+'''----------------------------------------------------------------------------------------------'''
+batch = 3
+n = 10
+d = 64
+head = 8
+
+# Q, K, V 都为(batch, n, d)
+Q, K, V = torch.randn((batch, n, d)), torch.randn((batch, n, d)), torch.randn((batch, n, d))
+'''----------------------------------------------------------------------------------------------'''
+class Multi_Head_Attention(torch.nn.Module):
+    def __init__(self, d_model, head):
+        super(Multi_Head_Attention, self).__init__()
+        # 多头注意力机制的分割方法是把原来的d分成head个小d即可
+        self.d = d_model
+        self.head = head
+        self.d_little = d_model // head
+
+        self.w_q = torch.nn.Linear(d_model, d_model)
+        self.w_k = torch.nn.Linear(d_model, d_model)
+        self.w_v = torch.nn.Linear(d_model, d_model)
+        self.combine = torch.nn.Linear(d_model, d_model)
+
+    def forward(self, Q, K, V):
+        batch = Q.shape[0]
+
+        q = self.w_q(Q)
+        k = self.w_k(K)
+        v = self.w_v(V)
+
+        # 多头分割 (batch, n, d) 变成 (batch, n, head, d_little)
+        # 维度转换 (batch, head, n, d_little)
+        q = q.view(batch, -1, self.head, self.d_little).permute(0, 2, 1, 3)
+        k = k.view(batch, -1, self.head, self.d_little).permute(0, 2, 1, 3)
+        v = v.view(batch, -1, self.head, self.d_little).permute(0, 2, 1, 3)
+
+        # (batch, head, n, n)
+        scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(self.d_little)
+        attention = torch.nn.functional.softmax(scores, dim=-1)
+        # (batch, head, n, d_little)
+        output = torch.matmul(attention, v)
+        # (batch, n, head, d_little)
+        # 很多对张量的维度上面的变化都是需要连续内存的，所以需要contiguous
+        output = output.permute(0, 2, 1, 3).contiguous()
+        # (batch, n, d)
+        output = output.view(batch, -1, self.d)
+
+        output = self.combine(output)
+
+        return output
+    
+module = Multi_Head_Attention(d, head)
+'''----------------------------------------------------------------------------------------------'''
+ouput = module(Q, K, V)
+print(ouput.shape)
+
+

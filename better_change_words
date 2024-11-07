@@ -1,0 +1,71 @@
+import torch
+'''----------------------------------------------------------------------------------------------'''
+original_words = 'beautifulq'
+replace_words  = 'obviouslyabc'
+
+
+def one_hot_encoding(x, y):
+    # 把所有涉及到的字母进行去重，排序，以列表的形式赋值给alphas
+    words = list(x + y)
+    alphas = sorted(set(words))
+
+    # 创建字典，每一个字母对应一个索引值
+    dictionary = {alpha: i for (i, alpha) in enumerate(alphas)}
+
+    # 创建x的独热编码
+    x_hot = torch.zeros(size=(max(len(x), len(y)), len(dictionary)), dtype=torch.float32)
+    for (i, alpha) in enumerate(list(x)):
+        index = dictionary[alpha]
+        x_hot[i, index] = 1.0
+
+    # 创建y的独热编码
+    y_hot = torch.zeros(size=(max(len(x), len(y)), len(dictionary)), dtype=torch.float32)
+    for (i, alpha) in enumerate(list(y)):
+        index = dictionary[alpha]
+        y_hot[i, index] = 1.0
+
+    return x_hot, y_hot
+
+
+x_hot, y_hot = one_hot_encoding(original_words, replace_words)
+# hot(n, size) 一共n个字母，每个字母的独热编码的长度都是size, 这里的n是两个单词的字长的较大值
+# 变为(n, batch, size) 表示rnn的循环次数为n次，每次的输入为(batch, size)，其中batch=1
+x_hot = x_hot.view(-1, 1, x_hot.shape[-1])
+y_hot = y_hot.view(-1, 1, y_hot.shape[-1])
+'''----------------------------------------------------------------------------------------------'''
+class Rnn(torch.nn.Module):
+    def __init__(self, x_size, h_size):
+        super(Rnn, self).__init__()
+        # 因为hidden的层数就是1层，所以hidden=(1, batch, h_size), 其中h_size=y_size
+        self.hidden = torch.zeros(1, 1, h_size)
+        self.rnn = torch.nn.RNN(x_size, h_size, 1)
+
+    def forward(self, x):
+        output, _ = self.rnn(x, self.hidden)
+        output = torch.nn.functional.softmax(output, dim=-1)
+
+        return output
+    
+module = Rnn(x_hot.shape[-1], y_hot.shape[-1])
+'''----------------------------------------------------------------------------------------------'''
+criterion = torch.nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(module.parameters(), lr=0.05)
+'''----------------------------------------------------------------------------------------------'''
+for epoch in range(100):
+    loss = 0
+    output = module(x_hot)
+    for i in range(x_hot.shape[0]):
+        loss += criterion(output[i, 0], y_hot[i, 0])
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+with torch.no_grad():
+    output = module(x_hot)
+    output = torch.argmax(output, dim=-1)
+    y_hot = torch.argmax(y_hot, dim=-1)
+
+    print(output==y_hot)
+    
+
