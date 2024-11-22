@@ -1,0 +1,130 @@
+import torch
+import math
+'''----------------------------------------------------------------------------------------------'''
+class Position_and_Linear(torch.nn.Module):
+    # 输入x，x的形状是(batch, n, d_in)
+    # 输出y, y的形状是(batch, n, d_out)    
+    def __init__(self, d_in, d_middle, d_out):
+        super(Position_and_Linear, self).__init__()
+        self.linear_1 = torch.nn.Linear(d_in, d_middle)
+        self.linear_2 = torch.nn.Linear(d_middle, d_out)
+        self.relu = torch.nn.ReLU()
+
+    def forward(self, x):
+        # 经过两个线性层和一个relu层实现最后一个维度的降维
+        x = self.linear_1(x)
+        x = self.relu(x)
+        x = self.linear_2(x)
+
+        return x
+'''----------------------------------------------------------------------------------------------'''    
+class Res_and_Ln(torch.nn.Module):
+    # 将pal的输入x与输出y进行残差连接，随后再进行LN层规范化
+    def __init__(self, shape, dropout):
+        super(Res_and_Ln, self).__init__()
+        self.ln = torch.nn.LayerNorm(shape)
+        self.dropout = torch.nn.Dropout(dropout)
+
+    def forward(self, x, y):
+        # 先进行残差连接
+        x = x + self.dropout(y)
+        # 再进行层规范化
+        x = self.ln(x)
+
+        return x
+'''----------------------------------------------------------------------------------------------'''
+class Self_Multi_Head_Attention(torch.nn.Module):
+    # 将原本的多头注意力改成自多头注意力即可, 省略维度的变换
+    def __init__(self, d, head):
+        super(Self_Multi_Head_Attention, self).__init__()
+        self.d = d
+        self.head = head
+        self.d_little = d // head
+
+        self.w_q = torch.nn.Linear(d, d)
+        self.w_k = torch.nn.Linear(d, d)
+        self.w_v = torch.nn.Linear(d, d)
+        self.combine = torch.nn.Linear(d, d)
+
+    def forward(self, X):
+        batch = X.shape[0]
+
+        q = self.w_q(X)
+        k = self.w_k(X)
+        v = self.w_v(X)
+
+        q = q.view(batch, -1, self.head, self.d_little).permute(0, 2, 1, 3)
+        k = k.view(batch, -1, self.head, self.d_little).permute(0, 2, 1, 3)
+        v = v.view(batch, -1, self.head, self.d_little).permute(0, 2, 1, 3)
+
+        scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(self.d_little)
+        attention = torch.nn.functional.softmax(scores, dim=-1)
+        output = torch.matmul(attention, v)
+    
+        output = output.permute(0, 2, 1, 3).contiguous()
+        output = output.view(batch, -1, self.d)
+
+        output = self.combine(output)
+
+        return output
+'''----------------------------------------------------------------------------------------------''' 
+class Position_Coding(torch.nn.Module):
+    def __init__(self, batch, n, d):
+        super(Position_Coding, self).__init__()
+        self.P = torch.zeros((batch, n, d))
+
+        numerator = torch.arange(0, n, dtype=torch.float32).reshape(-1, 1)
+        denominator = torch.pow(10000, torch.arange(0, d, 2, dtype=torch.float32).reshape(1, -1) / d)
+        X = numerator / denominator
+
+        self.P[:, :, 0::2] = torch.sin(X) 
+        self.P[:, :, 1::2] = torch.cos(X) 
+
+    def forward(self, X):
+        X = X + self.P
+        return X
+'''----------------------------------------------------------------------------------------------'''   
+class Encoder_Block(torch.nn.Module):
+    # 输入x, 进行多头自注意力, 得到y
+    # x与y, 进行res和ln, 得到z
+    # z, 进行pal, 得到u
+    # z与u, 进行res和ln, 结束
+    def __init__(self, d, head, n, dropout, d_middle):
+        super(Encoder_Block, self).__init__()
+        self.attention = Self_Multi_Head_Attention(d, head)
+        self.addnorm = Res_and_Ln((n, d), dropout)
+        self.pal = Position_and_Linear(d, d_middle, d)
+    
+    def forward(self, x):
+        y = self.attention(x)
+        z = self.addnorm(x, y)
+        u = self.pal(z)
+        result = self.addnorm(z, u)
+
+        return result
+'''----------------------------------------------------------------------------------------------'''   
+class Left_Block(torch.nn.Module):
+    # 创建一个两层的encoder
+    def __init__(self, batch, n, d, dictionary, head, left_layer, dropout, d_middle):
+        super(Left_Block, self).__init__()
+        # 在进行两次encoder之前, 要先对数据进行embed和position
+        self.d = d
+        self.embed = torch.nn.Embedding(dictionary+1, d)
+        self.position = Position_Coding(batch, n, d)
+        # 两次encoder
+        self.blks = torch.nn.Sequential()
+        for i in range(left_layer):
+            self.blks.add_module("block"+str(i), Encoder_Block(d, head, n, dropout, d_middle))
+
+    def forward(self, X):
+        # 对x进行嵌入后, 缩放一下数据的大小再与位置编码相加 (原因未知)
+        X = self.position(self.embed(X) * math.sqrt(self.d))
+        # 两次encoder
+        for _, blk in enumerate(self.blks):
+            X = blk(X)
+        return X
+'''----------------------------------------------------------------------------------------------'''
+x = torch.ones((2, 100), dtype=torch.long)
+module = Left_Block(2, 100, 32, 20, 4, 3, 0.5, 48)
+x = module(x)
+print(x.shape)
