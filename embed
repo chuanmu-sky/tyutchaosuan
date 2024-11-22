@@ -1,0 +1,39 @@
+import torch
+# 输入两句话
+u = 'I like you'
+v = 'I want to go home'
+
+# 创建word变量，里面涵盖所有的不重复的单词
+words = f"{u} {v}"
+words = list(words.split(" "))
+words = sorted(set(words))
+
+print(words)
+
+# 创建字典，每一个单词对应一个标号
+dictionary = {}
+for i, word in enumerate(words, 1):
+    dictionary[word] = i
+
+print(dictionary)
+
+# 创建x，x是二维矩阵a*b，a代表句子的个数，b代表每个句子中单词的个数的最大值
+x = torch.zeros((2,5),dtype=torch.long)
+for i, word in enumerate(list(u.split(" "))):
+    x[0, i] = dictionary[word]
+
+for i, word in enumerate(list(v.split(" "))):
+    x[1, i] = dictionary[word]
+
+print(x)
+
+print(len(dictionary))
+# embedding的参数是(diction+1,d), 其中diciton是指字典的长度7，d是要映射的维度(自定义)
+embed = torch.nn.Embedding(len(dictionary)+1, 3)
+x = embed(x)
+# x的形状是(batch,n,d), 其中batch指两个句子, n指每个句子中的最大单词个数5, d是映射出的维度 
+print(x.shape)
+# embed的实现方式，首先会创建一个(diction+1, d)的权重矩阵w
+# 然后遍历(batch,n)中的每一个元素的值i, 然后为每一个元素隐射出(d,)的张量w[i]
+print(x)
+print(embed.weight)
