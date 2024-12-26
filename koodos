@@ -1,0 +1,270 @@
+import math
+import copy
+import pickle
+import numpy as np
+from sklearn.manifold import TSNE
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from matplotlib.animation import FuncAnimation
+from mpl_toolkits.mplot3d import Axes3D, art3d
+from matplotlib import cm
+seed = 1
+device = 'cuda:0'
+torch.manual_seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+np.random.seed(seed)
+'''----------------------------------------------------------------------------------------------'''
+# 一共有50个数据，每个数据代表着某个t时刻的点的形状
+# 一共1000个点，每个点用二维坐标表示其位置，每个点还有一个target标签用来表示颜色
+# 前35组是训练数据，后15组是测试数据
+def load_datasets(filename="dataset.pkl"):
+    with open(filename, "rb") as f:
+        data = pickle.load(f)
+    return data["datasets"], data["time_points"]
+
+datasets, time_points = load_datasets('D:\\develop\\data_train\\koodos\\dataset.pkl')
+'''----------------------------------------------------------------------------------------------'''
+# 数据可视化
+def visualize_moon(datasets, time_points):
+    ndomamins = len(time_points)
+    ncols = 5
+    nrows = math.ceil(ndomamins / ncols)
+    
+    fig, axs = plt.subplots(figsize=(14, 2.5 * nrows), nrows=nrows, ncols=ncols)
+    axs = axs.ravel()
+
+    all_data = np.vstack([data for data, _ in datasets])
+    x_min, x_max = all_data[:, 0].min() - 0.5, all_data[:, 0].max() + 0.5
+    y_min, y_max = all_data[:, 1].min() - 0.5, all_data[:, 1].max() + 0.5
+
+    for idx, (X_t, y_t) in enumerate(datasets):
+        axs[idx].scatter(X_t[:, 0], X_t[:, 1], s=10, c=y_t, cmap="coolwarm")
+        axs[idx].set_xlim([x_min, x_max])
+        axs[idx].set_ylim([y_min, y_max])
+        axs[idx].set_title(f"Domain {idx+1} \n time={time_points[idx]:.3f}")
+    plt.tight_layout()
+    plt.show()
+    
+def visualize_time(time_points):
+    plt.figure(figsize=(14, 0.5))
+    plt.plot(time_points, np.zeros_like(time_points), 'bo-', label="Domains", markersize=5)
+    plt.yticks([])
+    
+    plt.xlabel("Time")
+    plt.title("Timepoints of Random Generated Domains")
+    plt.show()
+
+visualize_time(time_points)            # 展示当前时间
+visualize_moon(datasets, time_points)  # 展示数据形状
+'''----------------------------------------------------------------------------------------------'''
+data_dim = 2      # 每一个点的坐标是用二维坐标来表示的
+gene_dim = 2751   # 所有的参数的个数
+embed_dim = 32    # 嵌入库普曼空间后的维度
+n_train = 35      # 训练数据的个数
+
+# 输入点的坐标，输出其对应的颜色(1000,2)变为(1000,1)
+# 35个训练数据，每个数据都对应一个训练模型
+predictive_model = nn.ModuleList([nn.Sequential(
+            nn.Linear(data_dim, 50),
+            nn.ReLU(),
+            nn.Linear(50, 50),
+            nn.ReLU(),
+            nn.Linear(50, 1),
+            nn.Sigmoid()) for i in range(n_train)])
+
+def generalized_model(domain_x, domain_param):
+    # 输入参数，输入点的坐标，输出对应的颜色
+    m_1 = domain_param[:data_dim * 50]
+    b_1 = domain_param[data_dim * 50:data_dim * 50 + 50]
+    m_2 = domain_param[data_dim * 50 + 50:data_dim * 50 + 50 + 50 * 50]
+    b_2 = domain_param[data_dim * 50 + 50 + 50 * 50:data_dim * 50 + 50 + 50 * 50 + 50]
+    m_3 = domain_param[data_dim * 50 + 50 + 50 * 50 + 50:data_dim * 50 + 50 + 50 * 50 + 50 + 50]
+    b_3 = domain_param[-1]
+
+    domain_y = torch.sigmoid(F.linear(torch.relu(F.linear(torch.relu(F.linear(domain_x, m_1.reshape((50, data_dim)), b_1)), m_2.reshape((50, 50)), b_2)), m_3.reshape((1, 50)), b_3))
+    return domain_y
+
+# Encoder层，把高纬度参数嵌入低纬度库普曼空间
+encoder = nn.Sequential(
+            nn.Linear(gene_dim, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Linear(512, 128),
+            nn.ReLU(),
+            nn.Linear(128, embed_dim))
+
+# Decoder层，把低纬度参数重新转回到高维空间
+decoder = nn.Sequential(
+            nn.Linear(embed_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 512),
+            nn.ReLU(),
+            nn.Linear(512, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, gene_dim))
+
+class dyna_f(nn.Module):
+    # 库普曼操作
+    # 输入了batch组在时间上连续的用于预测x与target的参数：theta
+    # 定义库普曼参数的意义是d(theta)/d(t)
+    # 将库普曼参数和odeint方法结合，就可以在时间上积分，输入上一次的theta，预测出下一次的theta
+    # 所以这里预测出来的theta并不是准确的
+    # 所以这里的库普曼参数是可以训练的
+    def __init__(self):
+        super(dyna_f, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim, bias=False))
+
+    def forward(self, t, y):
+        return self.net(y)
+
+from torchdiffeq import odeint
+ode_method = 'rk4'
+rk_step = 0.2
+'''----------------------------------------------------------------------------------------------'''
+class Koodos(nn.Module):
+    def __init__(self, time_point):
+        super(Koodos, self).__init__()
+        self.time_point = time_point
+        self.pred_model = predictive_model
+        self.gene_model = generalized_model
+        self.encoder = encoder
+        self.decoder = decoder
+        self.dynamic = dyna_f()
+
+    def predictive_model_pred(self, X, idx):
+        # 实际并不是直接把35个放一起训练，而是10个10个
+        # 所以这里x是(10, 1000, 2)
+        # idx表示本组开头是35个中的第几个
+        seg_length = len(X)
+        pred, param = [], []
+        for i in range(seg_length):
+            x = X[i]
+            # 这里pred用来存储每一个时间点的target
+            pred.append(self.pred_model[idx + i](x))
+            # 这里param用来存储每一个时间点的2751个参数   
+            param.append(torch.cat([p.flatten() for p in self.pred_model[idx + i].parameters()]))
+        # 原来的pred是一个列表，列表里有10个tensor，每个tensor是(1000,1)
+        # 现在的pred是一个tensor，形状是(10*1000,1)
+        # 原来的param是一个列表，列表里有10个tensor，每个tensor是(2751,)
+        # 现在的param是一个tensor，形状是(10, 2751)
+        pred, param = torch.cat(pred), torch.stack(param)
+        return param, pred
+
+    def generalized_model_pred(self, X, Gene_Param):
+        # x是(10,1000,2)
+        # G_P是(10,2751)
+        seg_length = Gene_Param.shape[0]
+        pred = []
+        for d in range(seg_length):
+            x, param = X[d], Gene_Param[d]
+            y = self.gene_model(x, param)
+            # pred是10个tensor(1000,1)的列表
+            pred.append(y)
+        # pred是tensor(10*1000,1)
+        return torch.cat(pred)
+    
+    def forward(self, X, continous_time=None, idx=0):
+        # 获得每个时间点的初始参数，初始预测值
+        # (10, 2751) (10*1000, 1)
+        init_param, init_pred = self.predictive_model_pred(X, idx)
+        # 初始参数降维
+        # (10, 2751) -> (10, 32)
+        init_embed = self.encoder(init_param)
+        # 获得库普曼操作后的参数
+        # (10, 32) -> (10, 32)
+        gene_embed = odeint(self.dynamic, init_embed[0], continous_time, method=ode_method, options={'step_size': rk_step})
+        # 库普曼操作后的参数还原以及原始参数的直接还原
+        # (10, 32) -> (10, 2751)
+        gene_param = self.decoder(gene_embed)
+        init_debed = self.decoder(init_embed)
+        # 获得库普曼操作后的预测值
+        # (10*1000, 1)
+        gene_pred = self.generalized_model_pred(X, gene_param)
+
+        return init_pred, gene_pred, init_param, init_embed, init_debed, gene_param, gene_embed
+'''----------------------------------------------------------------------------------------------'''
+# dataset一共有50组数据，每组数据有两组
+# 第一组是坐标(1000, 2)
+# 第二组是颜色(1000, 1)
+# X、Y分别是(50, 1000, 2)  (50, 1000, 1)
+# time_points是(50,)
+X = torch.Tensor(np.array([item[0] for item in datasets])).to(device)
+Y = torch.Tensor(np.array([item[1] for item in datasets]))[:,:,None].to(device)
+time_points = torch.Tensor(time_points).to(device)
+X_train, X_text, Y_train, Y_test, time_train, time_test = X[:n_train], X[n_train:], Y[:n_train], Y[n_train:], time_points[:n_train], time_points[n_train:]
+
+seg_len = 10
+n_val_seg = 5
+'''----------------------------------------------------------------------------------------------'''
+train_domain_seg = []
+for idx in range(n_train - 1):
+    l = min(n_train - idx, seg_len)
+    seg_time, seg_X, seg_Y = time_train[idx:idx + l], X_train[idx:idx + l], Y_train[idx:idx + l]
+    train_domain_seg.append([seg_time, seg_X, seg_Y])
+
+n_seg, n_train_seg = len(train_domain_seg), len(train_domain_seg) - n_val_seg
+idx_train_seg = np.arange(n_train_seg, dtype=np.int64)
+idx_val_seg = np.arange(n_train_seg, n_seg, dtype=np.int64)
+'''----------------------------------------------------------------------------------------------'''
+epoch = 300
+batch = 5
+alpha = 1
+beta = 100
+gamma = 10
+weight_decay = 1e-4
+
+model = Koodos(time_train)
+model.to(device)
+optimizer = torch.optim.Adam([{'params': model.pred_model.parameters(), 'lr': 1e-2, 'weight_decay': weight_decay},
+                              {'params': model.encoder.parameters(), 'lr': 1e-3, 'weight_decay': weight_decay},
+                              {'params': model.decoder.parameters(), 'lr': 1e-3, 'weight_decay': weight_decay},
+                              {'params': model.dynamic.parameters(), 'lr': 1e-3, 'weight_decay': weight_decay}])
+
+min_val_loss = np.inf
+for e in range(epoch):
+    epoch_loss = 0
+    
+    for batch_idx in np.array_split(idx_train_seg, n_train_seg // batch):
+        loss = 0
+        for idx in batch_idx:
+            seg_time, seg_X, seg_Y = train_domain_seg[idx]
+            init_pred, gene_pred, init_param, init_embed, init_debed, gene_param, gene_embed = model(seg_X, seg_time, idx)
+
+            Y = seg_Y.view(-1, 1)
+            loss_intri = F.binary_cross_entropy(init_pred, Y)
+            loss_integ = F.binary_cross_entropy(gene_pred, Y)
+            loss_recon = F.mse_loss(init_param, init_debed)
+            loss_dyna = F.mse_loss(init_embed, gene_embed)
+            loss_consis = F.mse_loss(init_param, gene_param)
+            loss = loss + alpha * loss_intri + alpha * loss_integ + beta * loss_recon + gamma * loss_dyna + beta * loss_consis
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        epoch_loss+=loss.item()
+        
+    val_loss = 0
+    for idx in idx_val_seg:
+        seg_time, seg_X, seg_Y = train_domain_seg[idx]
+        init_pred, gene_pred, _, _, _, _, _ = model(seg_X, seg_time, idx)
+        Y = seg_Y.view(-1, 1)
+        loss_integ = F.binary_cross_entropy(gene_pred, Y)
+        val_loss = val_loss + loss_integ.item()
+
+    if val_loss < min_val_loss:
+        min_val_loss = val_loss
+        best_model_state = copy.deepcopy(model.state_dict())
+    
+    if e % 20 == 0:
+        print('Epoch: {}, Train Loss: {:.5f}, Val Loss: {:.5f}'.format(e, epoch_loss, val_loss))
+        
+model.load_state_dict(best_model_state)
+'''----------------------------------------------------------------------------------------------'''

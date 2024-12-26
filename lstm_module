@@ -1,0 +1,121 @@
+import torch
+# 小lstm由多个rnn模块组合而成
+# 输入有x，last_hidden, last_c
+# 输出有y, now_hidden, now_c
+'''----------------------------------------------------------------------------------------------'''
+# x的形状是(batch,x_size)
+# 在进入rnn模块中后的维度将变为(batch, x_hidden), 所以x的权重w_x为(x_size, x_hidden)
+# last_hidden的形状是(batch, x_hidden), 所以hidden的权重w_h是(x_hidden,x_hidden)
+# bias的形状是(1,x_hidden)
+# (x*w_x + hidden*w_h + bias)要激活一下
+
+# y的形状是(batch，x_out), 所以激活后的权重是(x_hidden, x_out)
+# 在这里令x_size=x_out
+class get_lstm_parameters():
+    def __init__(self, x_size, x_hidden, device):
+        self.x_input = x_size
+        self.x_hidden = x_hidden
+        self.x_out = x_size
+        self.device = device
+    
+    def three(self):
+        # 方便获得参数而已
+        return(
+            torch.nn.Parameter(torch.randn(self.x_input, self.x_hidden) * 0.01).to(self.device),
+            torch.nn.Parameter(torch.randn(self.x_hidden, self.x_hidden) * 0.01).to(self.device),
+            torch.nn.Parameter(torch.zeros(self.x_hidden)).to(self.device)
+        )
+    
+    def get_params(self):
+        #分别获得了输入门，遗忘门，输出门，候选门的参数
+        w_x_i, w_h_i, b_i = self.three()
+        w_x_f, w_h_f, b_f = self.three()
+        w_x_o, w_h_o, b_o = self.three()
+        w_x_c, w_h_c, b_c = self.three()
+        #另外还有一个输出层，因为这个的维度和three不同，所以得单独定义
+        w_h_out = torch.randn(self.x_hidden, self.x_out).to(self.device)
+        b_out = torch.zeros(self.x_out).to(self.device)
+
+        params = [w_x_i, w_h_i, b_i, 
+                  w_x_f, w_h_f, b_f, 
+                  w_x_o, w_h_o, b_o, 
+                  w_x_c, w_h_c, b_c, 
+                  w_h_out, b_out]
+        return params
+'''----------------------------------------------------------------------------------------------'''
+class lstm(torch.nn.Module):
+    # 具体运算过程见ddp图片
+    def __init__(self, x_size, x_hidden, device='cpu'):
+        super(lstm, self).__init__()
+        # 把所有要用到的参数都实例化一下
+        # 此时的所有参数都是具有parameter属性的
+        self.get_lstm_parameters = get_lstm_parameters(x_size, x_hidden, device=device)
+        [self.w_x_i, self.w_h_i, self.b_i, 
+         self.w_x_f, self.w_h_f, self.b_f, 
+         self.w_x_o, self.w_h_o, self.b_o, 
+         self.w_x_c, self.w_h_c, self.b_c, 
+         self.w_h_out, self.b_out] = self.get_lstm_parameters.get_params()
+      
+    def forward(self, X, last_h, last_c):
+        # 内部的4个rnn的运算
+        # hidden和c的形状一样
+        F = torch.sigmoid((X @ self.w_x_f) + (last_h @ self.w_h_f) + self.b_f)
+        I = torch.sigmoid((X @ self.w_x_i) + (last_h @ self.w_h_i) + self.b_i)
+        O = torch.sigmoid((X @ self.w_x_o) + (last_h @ self.w_h_o) + self.b_o)
+        C =    torch.tanh((X @ self.w_x_c) + (last_h @ self.w_h_c) + self.b_c)
+        # 获得三个输出
+        now_c = I * C + F * last_c
+        now_h = O * torch.tanh(now_c)
+        y = (now_h @ self.w_h_out) + self.b_out
+
+        return y, now_h, now_c
+'''----------------------------------------------------------------------------------------------'''
+# 输入有x，last_hidden, last_c
+# 输出有y, now_hidden, now_c
+device = 'cuda:0'
+batch = 10
+x_size = 5
+x_hidden = 15
+
+X = torch.randn(batch, x_size, dtype=torch.float32).to(device)
+origin_h = torch.zeros(batch, x_hidden).to(device)
+origin_c = torch.zeros_like(origin_h).to(device)
+'''----------------------------------------------------------------------------------------------'''
+module = lstm(x_size, x_hidden, device).to(device)
+Y, now_h, now_c = module(X, origin_h, origin_c)
+
+print(Y.shape)
+print(now_c.shape)
+print(now_h.shape)
+'''----------------------------------------------------------------------------------------------'''
+# 此时还可以验证该模型的参数是可优化的
+for i, para in module.named_parameters():
+    # 可以用module.parameters()方法，说明所有的自定义参数是可优化的
+    print(i)
+'''----------------------------------------------------------------------------------------------'''
+'''----------------------------------------------------------------------------------------------'''
+'''----------------------------------------------------------------------------------------------'''
+# 也可以直接使用现成API
+# 输入x的形状是(n, batch, x_size)
+# 表示一共有n个lstm元，每个元输入的x的形状是(batch, x_size)
+n = 10
+batch = 5
+x_size = 6
+
+X = torch.randn(n,batch,x_size)
+# 输入h与c的形状是(deep, batch, x_hidden)
+# 表示每个lstm元的深度是deep, 每个深度的输入都是(batch, x_hidden)
+deep = 2
+x_hidden = 15
+
+origin_h = torch.randn(deep, batch, x_hidden)
+origin_c = torch.randn_like(origin_h)
+
+# 实例化
+module = torch.nn.LSTM(x_size, x_hidden, num_layers=deep)
+y, [hidden_out, c_out] = module(X, [origin_h, origin_c])
+
+# 注意此时的y的最后一个维度是hidden
+print(y.shape)
+print(hidden_out.shape)
+print(c_out.shape)

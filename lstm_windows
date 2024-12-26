@@ -1,0 +1,114 @@
+import torch
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+from torch.utils.data import DataLoader
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+'''----------------------------------------------------------------------------------------------'''
+# 创建1000的时间序列的数据集
+np.random.seed(42)
+
+def generate_time_series(n_steps):
+    time = np.arange(0, n_steps)
+    series = 0.5 * np.sin(0.1 * time) + 0.05 * np.random.randn(n_steps)
+    return series
+
+n_steps = 1000
+series = generate_time_series(n_steps)
+
+# 将数据集的参数01标准化
+# 注意用到scaler时要把形状改成(-1, 1)
+# 所以标准化后的s_c也是(-1,1)的
+scaler = MinMaxScaler()
+series_scaled = scaler.fit_transform(series.reshape(-1, 1))
+'''----------------------------------------------------------------------------------------------'''
+#################################################################################################
+# 滑动窗口数据集                                                                         
+# 如果一个窗口有20个时间点，一共1000个时间点                                              
+# 那么每个窗口的输入分别表示[0,19]、[1, 20]、[2, 21]、···、[979, 998]时间点所对应的20个y值, 一共980个  
+# 那么每个窗口的输出分别表示[20]、[21]、[22]、···、[999]时间点所对应的y值, 一共980个    
+# 也就是说原问题是给定1000个时间点t，预测1000个输出y
+# 现在问题变成了给定20个时间点的输出y，预测下一个时间点的输出y
+#################################################################################################
+def create_dataset(series, time_steps):
+    x, y = [], []
+    for i in range(len(series) - time_steps):
+        x.append(series[i:(i + time_steps), 0])
+        y.append(series[i + time_steps, 0])
+    return np.array(x), np.array(y)
+
+# x的形状是(980, 20)
+# y的形状是(980, 1)
+# 在这里，980就可以看作是batch，而时间序列长度直接从1000降低到20
+time_steps = 20
+X, y = create_dataset(series_scaled, time_steps)
+
+# 划分训练集和测试集, 按照4比1的比例进行划分
+# 此时x形状是(batch=980*0.8 or 980*0.2, time_step=20)
+# 此时y形状是(batch=980*0.8 or 980*0.2, 1)
+train_size = int(len(X) * 0.8)
+x_train, x_test = X[:train_size], X[train_size:]
+y_train, y_test = y[:train_size], y[train_size:]
+'''----------------------------------------------------------------------------------------------'''
+class LSTMModel(torch.nn.Module):
+    def __init__(self, input_size, hidden_size, output_size, deep):
+        super(LSTMModel, self).__init__()
+        self.hidden_size = hidden_size
+        self.lstm = torch.nn.LSTM(input_size, hidden_size, deep)
+        self.linear = torch.nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        out, _ = self.lstm(x)
+        out = self.linear(out[-1,:,:])
+        return out
+'''----------------------------------------------------------------------------------------------'''
+input_size = 1
+output_size = 1
+
+hidden_size = 50
+deep = 3
+lr = 0.001
+
+model = LSTMModel(input_size, hidden_size, output_size, deep).to(device)
+criterion = torch.nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr)
+'''----------------------------------------------------------------------------------------------'''
+loss_train = []
+
+for epoch in range(1000):
+    x, y = x_train, y_train
+    # 此时x形状是(time_step, batch, 1)
+    # 此时y形状是(batch, 1)
+    x = torch.tensor(x, dtype=torch.float32).unsqueeze(-1).transpose(0, 1).to(device)
+    y = torch.tensor(y, dtype=torch.float32).reshape(-1, 1).to(device)
+
+    model.train()
+    optimizer.zero_grad()
+    output = model(x)
+    loss = criterion(output, y)
+    loss.backward()
+    optimizer.step()
+
+    loss_train.append(loss.item())
+    print('Epoch:{}, Loss:{}'.format(epoch, loss_train[-1]))
+
+model.eval()
+with torch.no_grad():
+    x = torch.tensor(x_test, dtype=torch.float32).unsqueeze(-1).transpose(0, 1).to(device)
+    y = torch.tensor(y_test, dtype=torch.float32).reshape(-1, 1).to(device)
+    output = model(x)
+    loss = criterion(output, y)
+    print('Test_loss:{}'.format(loss))
+
+    result = model(torch.tensor(X, dtype=torch.float32).unsqueeze(-1).transpose(0,1).to(device))
+    result = result.cpu().numpy()
+'''----------------------------------------------------------------------------------------------'''
+plt.figure(figsize=(10, 6))
+plt.plot(series_scaled[20:])
+plt.plot(result)
+plt.title('Generated Time Series Data')
+plt.xlabel('Time Steps')
+plt.ylabel('Value')
+plt.show()

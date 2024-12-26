@@ -1,0 +1,58 @@
+import torch
+
+def fitness(x):
+    return x**2 + 2*x
+
+def GWO(fitness, lb, ub, dim, n, max_iter):
+    # 初始化狼群的初始位置
+    position = torch.rand(n, dim) * (ub - lb) + lb
+    
+    for i in range(max_iter):
+        # 首先计算每个狼的适应性得分
+        fitness_gwo = []
+        for j in range(n):
+            fitness_gwo.append(fitness(position[j]))
+        
+        # 得到每个狼排序后的得分以及对应的狼的编号
+        fitness_gwo, num = torch.sort(torch.tensor(fitness_gwo))
+        
+        # 定义abd狼的位置
+        alpha_position = position[num[0]]
+        beta_position = position[num[1]]
+        delta_position = position[num[2]]
+
+        # 开始更新位置
+        a = 2 * (1 - i / max_iter)
+
+        for j in range(n):
+            r1 = torch.rand(1)
+            r2 = torch.rand(1)
+            A1 = 2 * a * r1 - a
+            D_alpha = torch.abs(2 * r2 - 1) * alpha_position - position[j]
+            X1 = alpha_position - A1 * D_alpha 
+
+            r1 = torch.rand(1)
+            r2 = torch.rand(1)
+            A2 = 2 * a * r1 - a
+            D_beta = torch.abs(2 * r2 - 1) * beta_position - position[j]
+            X2 = beta_position - A2 * D_beta 
+
+            r1 = torch.rand(1)
+            r2 = torch.rand(1)
+            A3 = 2 * a * r1 - a
+            D_delta = torch.abs(2 * r2 - 1) * delta_position - position[j]
+            X3 = delta_position - A3 * D_delta
+
+            position[j] = (X1 + X2 + X3) / 3
+
+            # 位置限定
+            for k in range(len(lb)):
+                if position[j][k]<lb[k]:
+                    position[j][k] = lb[k]
+                if position[j][k]>ub[k]:
+                    position[j][k] = ub[k]
+
+            
+    return print(alpha_position)
+
+GWO(fitness, torch.tensor([-6]), torch.tensor([2]), 1, 5, 100)
