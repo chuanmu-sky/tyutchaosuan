@@ -1,0 +1,107 @@
+import numpy as np
+import matplotlib.pyplot as plt
+'''----------------------------------------------------------------------------------------------'''
+class PSO():
+    def __init__(self, param, fun, num, iter):
+        # 获取粒子的个数、每个粒子的维度、迭代次数
+        self.num = num
+        self.dim = len(param)
+        self.iter = iter
+
+        # 获取所有待优化参数的名称
+        self.key_list = list(param.keys())
+        
+        # 获取lb与up
+        self.value_list = list(param.values())
+        self.lb = np.zeros((1, self.dim))
+        self.ub = np.zeros((1, self.dim))
+        for j in range(self.dim):
+            self.lb[0, j], self.ub[0, j] = self.value_list[j]
+            
+        # 获取fun函数
+        self.fun = fun
+
+        # 最优参数
+        self.best_result = {}
+    '''------------------------------------------------------------'''
+    def init_param(self):
+        # x的初始化是(lb, ub)之间
+        x = np.random.rand(self.num, self.dim) * (self.ub - self.lb) + self.lb
+        
+        # v的初始化是(-vm, +vm)之间
+        # vm = (ub-lb)*(0.1, 0.2)
+        vm = np.ones((1, self.dim)) * (self.ub -self.ub) * 0.1
+        v = np.random.rand(self.num, self.dim) * vm * 2 - vm
+
+        return x, v, vm
+    '''------------------------------------------------------------'''
+    def check(self, x, v, vm):
+        # 边界检查x与v
+        for i in range(self.num):
+            for j in range(self.dim):
+                if (x[i, j] < self.lb[0, j] or x[i, j] > self.ub[0, j]):
+                    x[i, j] = (self.ub[0, j] - self.lb[0, j]) * np.random.random() + self.lb[0, j]
+                if (v[i, j] < -vm[0, j] or v[i, j] > vm[0, j]):
+                    v[i, j] = vm[0, j] * (2 * np.random.random() - 1)
+        return x, v
+    '''------------------------------------------------------------'''
+    def get_fitness(self, x):
+        # 获得每一个粒子的适应度值
+        fitness = np.zeros(self.num)
+        for i in range(self.num):
+            fitness[i] = self.fun(x[i, :])
+        return fitness
+    '''------------------------------------------------------------'''
+    def optimize(self):
+        w_max, w_min = 0.8, 0.4
+        c1 = c2 = 2
+        x, v, vm = self.init_param()
+        
+        for iter in range(self.iter):
+            if iter == 0:
+                fitness = self.get_fitness(x)
+                best_fit = np.max(fitness)           
+                pbest = x.copy()                        
+                gbest = x.copy()[np.argmax(fitness), :]
+            else:
+                temp_fit = self.get_fitness(x)
+                for i in range(self.num):
+                    if temp_fit[i] > fitness[i]:
+                        pbest[i, :] = x[i, :].copy()
+                    if temp_fit[i] > best_fit:
+                        gbest = x[i, :].copy()
+                        best_fit = temp_fit[i].copy()
+                fitness = temp_fit.copy()               
+            
+            # 更新速度与位置
+            w = w_max - (w_max - w_min) * iter / self.iter
+            r1, r2 = np.random.random((self.num, self.dim)), np.random.random((self.num, self.dim))
+            v[:, :] = w * v[:, :] + c1 * r1 * (pbest[:, :] - x[:, :]) + c2 * r2 * (gbest - x[:, :])
+            x[:, :] = x[:, :] + v[:, :]
+
+            # 边界检查
+            x, v = self.check(x, v, vm)
+
+            print(f'第{iter+1}次训练：')
+            for i, para in enumerate(self.key_list):
+                print(para+': %.6f'%(gbest[i]))
+        # 记录最优参数
+        for i in range(self.dim):
+            self.best_result[self.key_list[i]] = gbest[i]
+    '''------------------------------------------------------------'''
+    def max(self):
+        return self.best_result
+'''----------------------------------------------------------------------------------------------'''
+def fun(param):
+    x,y,z = param[0],param[1],param[2]
+    return -(x**2 + (y-1)**2 + (z-2)**2)
+
+param = {
+    'x':(-2,2),
+    'y':(0, 4),
+    'z':(0, 5)
+}
+model = PSO(param, fun, 60, 20)
+
+model.optimize()
+print(model.max())
