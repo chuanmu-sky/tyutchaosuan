@@ -1,0 +1,28 @@
+import torch
+import numpy as np
+from bayes_opt import BayesianOptimization
+
+'''----------------------------------------------------------------------------------------------'''
+def f(x, y, z):
+    return (2*x + 3)**2 + (y-2)**2 + z**2
+
+def get_fitness(x, y, z):
+    return -f(x, y, z)
+'''----------------------------------------------------------------------------------------------'''
+# 贝叶斯优化的超参数设定
+pbounds = {
+    'x':  (-3, 0),
+    'y':  (1, 3),
+    'z':  (-1, 1),   
+}
+# 优化器的初始化
+optimizer = BayesianOptimization(
+    f = get_fitness,
+    pbounds=pbounds,
+    random_state=42
+)
+# 执行贝叶斯优化
+optimizer.maximize(init_points=5, n_iter=10)
+
+# 最佳超参数
+print("最佳参数：", optimizer.max)

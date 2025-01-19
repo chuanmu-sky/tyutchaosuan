@@ -1,0 +1,149 @@
+import torch
+import torch.nn as nn
+import math
+'''----------------------------------------------------------------------------------------------'''
+class Multi_Head_Attention(nn.Module):
+    def __init__(self, d, head, drop_at=0., drop_li=0.):
+        super(Multi_Head_Attention, self).__init__()
+        self.d = d
+        self.head = head
+        self.d_little = d // head
+        
+        self.w_q = nn.Linear(d, d)
+        self.w_k = nn.Linear(d, d)
+        self.w_v = nn.Linear(d, d)
+        self.drop_at = nn.Dropout(drop_at)
+        
+        self.combine = nn.Linear(d, d)
+        self.drop_li = nn.Dropout(drop_li)
+
+    def forward(self, x):
+        batch = x.shape[0]
+
+        q = self.w_q(x)
+        k = self.w_k(x)
+        v = self.w_v(x)
+
+        q = q.view(batch, -1, self.head, self.d_little).permute(0, 2, 1, 3)
+        k = k.view(batch, -1, self.head, self.d_little).permute(0, 2, 1, 3)
+        v = v.view(batch, -1, self.head, self.d_little).permute(0, 2, 1, 3)
+
+        scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(self.d_little)
+        attention = nn.functional.softmax(scores, -1)
+        attention = self.drop_at(attention)
+        
+        output = torch.matmul(attention, v)
+        output = output.permute(0, 2, 1, 3).contiguous().view(batch, -1, self.d)
+
+        output = self.combine(output)
+        output = self.drop_li(output)
+        return output
+'''----------------------------------------------------------------------------------------------'''
+class Mlp(nn.Module):
+    def __init__(self, d, d_hidden, active=nn.GELU, drop=0.):
+        super().__init__()
+        self.li_1 = nn.Linear(d, d_hidden)
+        self.act = active()
+        self.li_2 = nn.Linear(d_hidden, d)
+        self.drop = nn.Dropout(drop)
+ 
+    def forward(self, x):
+        x = self.drop(self.act(self.li_1(x)))
+        x = self.drop(self.li_2(x))
+        return x
+'''----------------------------------------------------------------------------------------------'''
+class Encoder(nn.Module): 
+    def __init__(self, d, head, drop_at=0., drop_li=0., mlp=4., active=nn.GELU, layer_norm=nn.LayerNorm):
+        super(Encoder, self).__init__()
+        self.ln_1 = layer_norm(d)
+        self.att = Multi_Head_Attention(d, head, drop_at, drop_li)
+        
+        self.ln_2 = layer_norm(d)
+        mlp_d_hidden = int(d * mlp)  # MLP第一个全连接层的个数
+        self.mlp = Mlp(d, mlp_d_hidden, active, drop_li)
+ 
+    def forward(self, x):
+        # 输入x, 进行ln, 然后进行注意力, 再resnet
+        # 先ln, 再进行MLP, 最后resnet
+        x = x + self.att(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
+'''----------------------------------------------------------------------------------------------'''
+class Patch_Embedding(torch.nn.Module):       
+    def __init__(self, img_size=224, patch=16, hidden_dim=256, layer_norm=None):           
+        super(Patch_Embedding, self).__init__()
+        self.img_size = img_size
+        self.patch_num = (img_size // patch) ** 2
+        self.cnn = nn.Conv2d(3, hidden_dim, patch, patch)
+        self.ln = layer_norm(hidden_dim) if layer_norm else nn.Identity()
+            
+    def forward(self, x):
+        # 输入 (batch, c, h, w)
+        # 卷积 (batch, dim, h/patch, w/patch)
+        # 展开 (batch, dim, h*w / patch^2)————(batch, dim, patch_num)
+        # 换维 (batch, patch_num, dim)
+        x = self.cnn(x)  
+        x = x.flatten(2).transpose(1, 2) 
+        x = self.ln(x)
+        return x
+'''----------------------------------------------------------------------------------------------'''
+class VisionTransformer(nn.Module):
+    def __init__(self, img_size=224, patch=16, hidden_dim=256, 
+                 head=16, drop_at=0., drop_li=0., mlp=4., active=nn.GELU, layer_norm=nn.LayerNorm,
+                 iter=3, num_classes=100):
+        super(VisionTransformer, self).__init__()
+        self.d = hidden_dim
+        self.num_classes = num_classes
+
+        # Patch Embedding 模块
+        self.patch_embed = Patch_Embedding(img_size, patch, hidden_dim, layer_norm)
+
+        # Class Token的新增矩阵 (实际上有batch个)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
+        # Position Embedding的矩阵 (实际上有batch个)
+        self.pos_embed = nn.Parameter(torch.zeros(1, 1 + self.patch_embed.patch_num, hidden_dim))
+
+        # Transformer Encoder
+        self.blks = nn.Sequential()
+        for i in range(iter):
+            self.blks.add_module(
+                "block"+str(i), Encoder(self.d, head, drop_at, drop_li, mlp, active, layer_norm))
+        
+        # 在进入Transformer之前要dropout
+        self.drop = nn.Dropout(drop_li)
+        # 在出去Transformer之后要layer_norm
+        self.ln = layer_norm(self.d)
+
+        # Classification 
+        self.cf = nn.Linear(self.d, num_classes)
+ 
+        # Weight init 权重初始化
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+ 
+    def forward_features(self, x):
+        # Patch Embedding
+        x = self.patch_embed(x)
+        # 把Class Token的矩阵复制batch次
+        cls_token = self.cls_token.expand(x.shape[0], -1, -1)
+        # 拼接, (batch, n, d) 变成 (batch, n+1, d) 
+        x = torch.cat((cls_token, x), dim=1)
+        # Position Embedding 然后再drop
+        x = self.drop(x + self.pos_embed)
+        # Transformer
+        x = self.blks(x)
+        # Layernorm
+        x = self.ln(x)
+        # 提取Class Token信息
+        return x[:, 0, :]
+ 
+    def forward(self, x):
+        x = self.forward_features(x)
+        x = self.cf(x)
+        return x
+'''----------------------------------------------------------------------------------------------'''
+model = VisionTransformer(hidden_dim=256)
+# 1000个图片，每个图片3通道，大小都是224
+picture = torch.randn((50, 3, 224, 224))
+target = model(picture)
+print(target.shape)
